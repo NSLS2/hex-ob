@@ -144,5 +144,14 @@ def tomo_flyscan_average(
         for det in detectors:
             if det.name in saved_ports:
                 yield from restore_averaging(det, saved_ports[det.name])
+        # After a completed scan the detector's unstage has already
+        # restarted the live view; but a failure BEFORE staging (e.g. in
+        # configure_averaging) leaves the camera stopped by _body's
+        # stop-preview. Restart any camera found stopped so the session
+        # stays usable without manual intervention.
+        for det in detectors:
+            acquiring = yield from bps.rd(det.driver.acquire)
+            if not acquiring:
+                yield from bps.wait_for([det.start_live_view])
 
     return (yield from bpp.finalize_wrapper(_body(), _cleanup()))

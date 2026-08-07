@@ -11,8 +11,11 @@ panda HDF ``Angle``):
 
   - run completes; detector and PandA both captured num_projections;
   - the detector HDF holds num_projections frames;
-  - the PandA HDF ``Angle`` dataset has num_projections values, strictly
-    increasing, starting ~start_deg and ending ~stop_deg.
+  - the PandA HDF ``Angle`` dataset has num_projections values,
+    non-decreasing (the sim's motor->INENC bridge updates slower than the
+    pulse train, so consecutive pulses can capture the same angle; a real
+    encoder would be strictly increasing), starting ~start_deg and ending
+    ~stop_deg.
 
 The sim frame tier free-runs when armed (trigger-mode semantics are
 cosmetic in the driver — PROGRESS §11), so this test SPAWNS the opt-in
@@ -135,7 +138,13 @@ def main(phase: str = "plain") -> None:
         sys.exit(f"armed_gate_bridge did not start — see {bridge_log_path}")
 
     if phase == "average":
-        _phase_average(RE, kinetix1, panda1, ph_open_cmd, ph_close_cmd, bridge)
+        try:
+            _phase_average(RE, kinetix1, panda1, ph_open_cmd, ph_close_cmd)
+        finally:
+            # An orphaned bridge keeps driving Acquire and doubles the
+            # hold/release cycles of every later run — never leave one.
+            if bridge.poll() is None:
+                bridge.terminate()
         return
 
     t0 = time.time()
@@ -201,7 +210,7 @@ def main(phase: str = "plain") -> None:
     print("\nPLAIN PHASE PASS")
 
 
-def _phase_average(RE, kinetix1, panda1, ph_open_cmd, ph_close_cmd, bridge):
+def _phase_average(RE, kinetix1, panda1, ph_open_cmd, ph_close_cmd):
     # Frame-averaged fly scan through the same gate.  Runs in its OWN
     # process (see the driver): consecutive fly scans in one session show
     # a one-frame plugin-state interplay — flagged for the beamline batch,

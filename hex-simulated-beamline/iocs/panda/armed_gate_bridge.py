@@ -30,7 +30,9 @@ Only the LOCAL sim is written; never point this at a real beamline.
 """
 
 import argparse
+import fcntl
 import os
+import signal
 import sys
 import time
 
@@ -47,6 +49,18 @@ def run(args):
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     from localguard import assert_local_epics
     assert_local_epics(default_ca="127.0.0.1:5085 127.0.0.1:5095")
+
+    # Single instance only: two bridges fight over Acquire (both hold and
+    # both restart), doubling hold/release cycles and leaking frames. The
+    # flock dies with the process — any exit, even SIGKILL, releases it.
+    lock = open("/tmp/hex-armed-gate-bridge.lock", "w")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        print("ERROR: another armed_gate_bridge is already running "
+              "(holds /tmp/hex-armed-gate-bridge.lock) — kill it first.",
+              file=sys.stderr)
+        return 1
 
     from epics import PV  # imported here so --help works without pyepics
 
@@ -97,6 +111,13 @@ def run(args):
     print(f"armed_gate_bridge up: watching {args.cam_prefix} + {args.counter_pv}, "
           f"gating {args.gate_pv}", flush=True)
 
+    # The sim test harness stops the bridge with SIGTERM (Popen.terminate),
+    # not Ctrl-C — route it through the same cleanup path.
+    def on_sigterm(signum, frame):
+        raise SystemExit(0)
+
+    signal.signal(signal.SIGTERM, on_sigterm)
+
     try:
         while True:
             time.sleep(1.0 / max(args.rate_hz, 1e-3))
@@ -143,8 +164,9 @@ def run(args):
                     time.sleep(0.2)
                     state["restarting"] = False
     except KeyboardInterrupt:
-        gate.put(1, wait=False)  # never leave the chain gated
         return 0
+    finally:
+        gate.put(1, wait=False)  # never leave the chain gated, on ANY exit
 
 
 def main(argv=None):
