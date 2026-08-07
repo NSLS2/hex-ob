@@ -86,5 +86,8 @@ def reset_detector(
 
     print("Restarting live view...")
     yield from bps.mv(detector.driver.acquire_period, live_view_period)
+    # wait_for takes awaitable FACTORIES (callables returning a
+    # coroutine) so the RE creates the coroutine in its own loop —
+    # hence the bound method, not a call.
     yield from bps.wait_for([detector.start_live_view])
     print("Reset done.")

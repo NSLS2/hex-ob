@@ -84,6 +84,9 @@ def enable_flat_correction(
     # the plugin chain.
     yield from bps.mv(detector.driver.acquire_period, exposure_time)
     yield from bps.mv(detector.driver.acquire_time, exposure_time)
+    # wait_for takes awaitable FACTORIES (callables returning a
+    # coroutine) so the RE creates the coroutine in its own loop —
+    # hence the bound method, not a call.
     yield from bps.wait_for([detector.start_live_view])
 
     moved = {"out": False}

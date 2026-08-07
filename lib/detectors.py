@@ -173,7 +173,10 @@ class HEXKinetixDetector(KinetixDetector):
         Acquire is a busy record and continuous mode never "finishes" — a
         plain set()/abs_set leaves a completion-tracked status that times
         out.  Uses the ADAcquireLogic non-blocking idiom; plans call this
-        via ``bps.wait_for([detector.start_live_view])``.
+        via ``bps.wait_for([detector.start_live_view])`` — wait_for takes
+        awaitable factories (callables returning a coroutine), so the bound
+        method is passed UNCALLED and the RunEngine creates/awaits the
+        coroutine in its own loop.
         """
         await self.driver.trigger_mode.set(KinetixTriggerMode.INTERNAL)
         await self.driver.image_mode.set(ADImageMode.CONTINUOUS)
