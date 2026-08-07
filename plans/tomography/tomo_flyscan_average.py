@@ -123,6 +123,11 @@ def tomo_flyscan_average(
     saved_ports: dict = {}
 
     def _body():
+        # Stop the live view BEFORE re-routing (the legacy stop_preview):
+        # otherwise streaming arrays sit in the plugin queues mid-rewire and
+        # leak into the new capture as phantom pre-kickoff frames.
+        for det in detectors:
+            yield from bps.abs_set(det.driver.acquire, 0, wait=True)
         for det in detectors:
             saved_ports[det.name] = yield from configure_averaging(
                 det, frames_to_average
