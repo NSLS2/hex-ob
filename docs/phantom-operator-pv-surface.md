@@ -78,3 +78,26 @@ Delete · DeleteStart/EndCine(+RBV) · StatusMessage_RBV
 
 ### phantomPartitionConfirm.bob
 CineCount_RBV · PartitionCines
+
+## Driver lineage (recon 2026-08-11)
+
+The deployed ADPhantom is a fork of Diamond's **miroCamera** driver
+(github: dls-controls miroCamera; local clone `~/git_projects/miroCamera`;
+jwlodek has merges there). Key deltas found so far:
+
+- Config renamed and extended: `miroCameraConfig(port, ctrl, data, ...)` →
+  `ADPhantomConfig(port, ctrl, data, MAC, interface, ...)`.
+- The fork ADDED `DownloadStartFrame/EndFrame` (the frame-window download
+  the ophyd device and plans drive) and the `AutoTrigger*` block — neither
+  exists in the Diamond ancestor.
+- **A camera protocol simulator already exists**: `miroCamera/sim/SimServer.py`
+  — a TCP server speaking the PH16 wire protocol (Python 2; predates the
+  fork's added features). Prime starting point for the sim tier's fake
+  camera.
+- Counter semantics in the ancestor: `TotalFrameCount_RBV` = the camera's
+  own cine frame count (`c<n>.frcount` over the wire — meaningful during
+  recording); `ArrayCounter_RBV` = areaDetector NDArray counter (advances
+  when frames flow through the pipeline, i.e. preview/download). Whether
+  the fork changed this decides which PV the ophyd device should watch for
+  post-trigger frames — settle from the deployed source (rsync from the
+  IOC host).
