@@ -68,6 +68,29 @@ for i in $(seq 60); do
 done
 say "  kinetix AD IOC OK"
 
+# ---- 2b. Phantom tier (sim camera + real ADPhantom IOC, CA :5105) ------------
+# START ORDER MATTERS: the driver opens its CTRL/DATA sockets at iocInit, so
+# sim_camera must be listening on 7115/7116 BEFORE the IOC container boots.
+if ! pgrep -f "iocs/phantom/sim_camera.py" >/dev/null; then
+    say "starting phantom sim camera (CTRL :7115 / DATA :7116)..."
+    nohup "$PY" -u "$root/iocs/phantom/sim_camera.py" \
+        > /tmp/hex-phantom-cam.log 2>&1 &
+    sleep 2
+fi
+if ! docker image inspect hexsim-phantom-ioc:local >/dev/null 2>&1; then
+    say "ERROR: image hexsim-phantom-ioc:local missing — build it once via the"
+    say "       nsls2.ioc_deploy steps in iocs/phantom/README.md (Phantom tier)."
+    exit 1
+fi
+say "phantom AD IOC..."
+COMPOSE_IGNORE_ORPHANS=1 docker compose -f "$root/compose/docker-compose.phantom.yml" up -d 2>/dev/null
+for i in $(seq 60); do
+    docker logs hexsim-phantom-ioc 2>&1 | grep -q "completed startup" && break
+    [ "$i" = 60 ] && { say "ERROR: phantom IOC never finished startup (docker logs hexsim-phantom-ioc)"; exit 1; }
+    sleep 2
+done
+say "  phantom AD IOC OK"
+
 # ---- 3. motor IOC (:5075) ----------------------------------------------------
 if ! ss -uln | grep -q "127.0.0.1:5075 "; then
     say "starting motor IOC..."

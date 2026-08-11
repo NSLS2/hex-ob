@@ -19,13 +19,49 @@ Two pieces:
   newline-terminated — the ancestor sim's bare `OK` would not work).
   Protocol-level tests: `tests/phantom_simcam_mock_test.py` (runs in the
   mock-tier CI).
-- **The IOC** (next step) — the deployed `adphantom_329598e` module run via
+- **The IOC** (BUILT 2026-08-11) — the deployed ADPhantom module run via
   the `nsls2.ioc_deploy` adphantom role against
   [`hexsim-phantom1.yml`](hexsim-phantom1.yml) (the live `phantom-det1.yml`
   with `CAMERA_IP: 127.0.0.1`), following the kinetix build path:
-  deploy in the `nsls2_ioc_deploy_el8` container, `docker commit` as
-  `hexsim-phantom-ioc:local`, CA bound loopback-only on the dedicated port
-  **:5105** (kinetix :5085, panda-ioc :5095, motor :5075).
+
+  ```bash
+  # 1. role deploy into the el8 container (compiles ADCore + ADPhantom)
+  cd ~/git_projects/nsls2.ioc_deploy
+  pixi run deployment --container -c .../iocs/phantom/hexsim-phantom1.yml
+  # 2. carry over the BEAMLINE'S INSTALLED camera template — the live
+  #    db/phantomCamera.template on xf27id1-det1 is hand-edited (adds the
+  #    AcquireTimeMs ms-helper records, absent from git; the ophyd device
+  #    NEEDS them). db/ is gitignored upstream, so the role can never
+  #    install this — it must be copied from the rsynced deployed module:
+  docker cp ~/git_projects/ADPhantom-deployed/db/phantomCamera.template \
+      nsls2_ioc_deploy_el8:/epics/modules/adphantom_afefafc/db/phantomCamera.template
+  # 3. snapshot as the compose image
+  docker commit nsls2_ioc_deploy_el8 hexsim-phantom-ioc:local
+  ```
+
+  CA bound loopback-only on the dedicated port **:5105** (kinetix :5085,
+  panda-ioc :5095, motor :5075). `scripts/up_all.sh` starts `sim_camera`
+  first (the driver opens its sockets at iocInit), then the compose
+  service; `scripts/env.sh` lists :5105.
+
+## Bring-up results (2026-08-11)
+
+- IOC boots to `completed startup`; driver attaches to `sim_camera`
+  (`attachToPort response: Ok!`, connection status 0) and serves **8371
+  records vs the beamline's 8328** — the delta is entirely infrastructure
+  (iocStats naming variants, Codec LZ4/Zlib params, autosave enums from
+  the module-version skew); the `cam1:` surface matches exactly after the
+  template carry-over above.
+- The full ophyd-async `PhantomIO` device **connects end-to-end** against
+  the live sim IOC (every PvSuffix resolves; identity/exposure/cine reads
+  correct through driver → PH16 protocol → sim).
+- **First genuine sim-tier catch** (invisible to the mock tier, which
+  fabricates matching enums): the device declared `Aux3PinMode` (no such
+  record on the real IOC — pins are 1/2/4) and paired setpoint/readback
+  as `rw_rbv` although the real mbbo has 12 choices vs the mbbi's 16
+  (`CEVENT/CMEMGATE/CFSYNC/CPRETRIG`) — connect *at the beamline* would
+  have failed identically. Fixed in `lib/phantom.py` + the hextools copy
+  (pins 1/2/4; separate setpoint enum + str readback).
 
 ## Ground truth this scaffold is built on (no guessed semantics)
 
@@ -37,6 +73,7 @@ Two pieces:
 | `ArrayCounter_RBV = lastfr+1` = post-trigger count during recording | `ADPhantom.cpp` status poll (~line 1370) |
 | Cine state tokens WTR/TRG/ACT/STR | `ADPhantom.cpp` `checkState` calls |
 | `NUM_CINES: 63`, prefix, camera IP/ports | live `phantom-det1.yml` + `records.dbl` snapshot |
+| Role pin `adphantom_afefafc` ≡ beamline `adphantom_329598e` + one `.gitignore` line — driver code byte-identical | `git diff --stat 329598e afefafc` in the ADPhantom clone (verified 2026-08-11) |
 
 ## Honest TODOs (marked in `sim_camera.py`)
 
