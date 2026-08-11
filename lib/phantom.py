@@ -57,7 +57,11 @@ from ophyd_async.epics.adcore import (
     NDFileHDF5IO,
     NDPluginBaseIO,
 )
-from ophyd_async.epics.core import PvSuffix, epics_signal_rw_rbv
+from ophyd_async.epics.core import (
+    PvSuffix,
+    epics_signal_r,
+    epics_signal_rw,
+)
 
 from .detectors import HEXADHDFDataLogic, SettablePathProvider
 
@@ -212,14 +216,29 @@ class PhantomIO(ADBaseIO):
 
     def __init__(self, prefix: str, name: str = ""):
         super().__init__(prefix, name=name)
+        # The real IOC (and the sim, byte-identical db) serves pins 1/2/4 only —
+        # there is no Aux3PinMode record — and the setpoint mbbo carries 12
+        # choices while the _RBV mbbi carries 16 (adds CEVENT/CMEMGATE/CFSYNC/
+        # CPRETRIG), so a paired rw_rbv signal can never connect. Setpoint and
+        # readback are therefore separate signals, the readback as str so the
+        # C-states remain readable.
         self.aux_pins = DeviceVector(
             {
-                i: epics_signal_rw_rbv(
+                i: epics_signal_rw(
                     PhantomAuxPinMode, prefix + f"Aux{i}PinMode", name=f"aux_pin{i}"
                 )
-                for i in range(1, 5)
+                for i in (1, 2, 4)
             },
             name="aux_pins",
+        )
+        self.aux_pins_rbv = DeviceVector(
+            {
+                i: epics_signal_r(
+                    str, prefix + f"Aux{i}PinMode_RBV", name=f"aux_pin{i}_rbv"
+                )
+                for i in (1, 2, 4)
+            },
+            name="aux_pins_rbv",
         )
 
         # IOC does not provide these signals, so make them derived here
