@@ -101,3 +101,34 @@ jwlodek has merges there). Key deltas found so far:
   the fork changed this decides which PV the ophyd device should watch for
   post-trigger frames — settle from the deployed source (rsync from the
   IOC host).
+
+## Deployed-source verdict (rsync from xf27id1-det1, 2026-08-11)
+
+Snapshots on this machine: `~/git_projects/phantom-det1-ioc-snapshot`
+(IOC dir incl. `records.dbl`, 8328 live records) and
+`~/git_projects/ADPhantom-deployed` (`/epics/modules/adphantom_329598e`,
+"ADPhantom" for the Phantom T2410, README credits miroCamera as base).
+
+- **Counter question SETTLED — the ophyd device is correct.** During
+  recording the fork's status poll sets `ArrayCounter_RBV = c<n>.lastfr + 1`,
+  which (trigger-relative frame numbering, `lastFrame > 0` guard) IS the
+  post-trigger frame count: 0 until the event, then counting up. So
+  `PhantomAcquireLogic` waiting on `array_counter == post_trig_frames` is
+  right. `TotalFrameCount_RBV = c<n>.frcount` (pre+post total).
+- **Cine state tokens** the driver parses from `c<n>.state`: `WTR`
+  (waiting for trigger), `TRG` (triggered), `ACT` (active), `STR`
+  (stored) — the state machine the sim server must walk.
+- **Template delta vs ancestor**: fork adds 52 records — the whole
+  RAM-download block (frame + cine windows, mode, speed, count, abort,
+  MarkCineSaved), the AutoTrigger block, Aux1/2/4 per-pin modes, Delete
+  block, SelectPixelDataFormat, DroppedPackets, FrameReadSpeed, QuietFan;
+  drops the ancestor's `Record*`/`SaveToCF` (CompactFlash) workflow.
+- **Sim server NOT modernized in the fork**: `sim/SimServer.py` is
+  byte-identical to the ancestor's (Python 2, 411 lines, PH16 parameter
+  dictionary inline; predates the fork's download-window/auto-trigger
+  features). Porting + extending it is the sim-tier work.
+- **HEX deployment values** (`phantom-det1.yml`): prefix
+  `XF:27ID1-ES{Phantom-Det:1}`, `NUM_CINES: 63` (matches the screens),
+  camera at `100.100.214.107` on `ens10f0`.
+- Live plugin chain (records.dbl): Over1, Stats1–5, Proc1, ROIStat1,
+  HDF1, Attr1, … — the sim's IOC must load the same chain.
