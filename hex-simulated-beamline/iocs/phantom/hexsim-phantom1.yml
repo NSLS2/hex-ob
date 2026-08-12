@@ -17,6 +17,6 @@ phantom-sim1:
         ENGINEER: "hex-ob simulated beamline (deployed config: J. Wlodek)"
         CAMERA_IP: 127.0.0.1
         # CTRL_PORT/DATA_PORT default to 7115/7116 (sim_camera's defaults).
-        MAC_ADDR: "1423f21fdeb0"   # carried from the live config; unused by the sim
+        MAC_ADDR: "020000000000"   # dummy (locally administered) — the sim never reads it; the real value stays in the beamline's live config
         INTF: lo
         NUM_CINES: 63
