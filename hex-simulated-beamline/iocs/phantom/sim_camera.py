@@ -102,13 +102,23 @@ AUTO = {
     },
 }
 
-IRIG = {"synced": 0, "offset": 0}
+# yearbegin: epoch seconds at Jan-1 that the driver ADDS to each frame's
+# timestamp; readoutDataStream stringToInteger()s it BEFORE the first img
+# request, so a missing key silently aborts every download (found live,
+# 2026-08-12). 0 = timestamps stay at epoch, consistent with the zeroed
+# time-stream this sim serves.
+IRIG = {"synced": 0, "offset": 0, "yearbegin": 0}
 
 META = {"name": "", "comment": "", "lens": "", "fstop": 0, "flen": 0}
 
 CINE_TEMPLATE = {
     "res": "1280 x 800", "rate": 1000.0, "exp": 5000, "edrexp": 0,
     "ptframes": 0, "frcount": 0, "state": "{ DEF }",
+    # Nested substructs the driver reads per-frame as NDArray attributes
+    # (c<n>.meta.name/vw/vh, c<n>.cam.trigpol/trigfilt/syncimg) and in
+    # updateCine; values mirror the ancestor sim's cine 'cam' block.
+    "meta": {"name": "", "vw": 1280, "vh": 800},
+    "cam": {"syncimg": 0, "trigpol": 1, "trigfilt": 1},
     "firstfr": 0, "lastfr": 0, "format": 0, "decimation": 1,
     "frsize": 40336,
     "trigtime": {"secs": 0, "frac": 0},
@@ -125,7 +135,14 @@ def dict_to_response(name, dict_in, level=None):
         if isinstance(value, dict):
             reply += dict_to_response(item, value, new_level) + "\t\\\r\n"
         else:
-            quote = '"' if isinstance(value, str) else ""
+            # Flag lists ("{ WTR ACT }") go UNQUOTED: the driver's
+            # parseDataStruc only files a flag-list item through its
+            # repeat-terminator special case, which quoting defeats — with
+            # quotes, c<n>.state silently never reaches paramMap_ and the
+            # State_RBV records stay 0 (found live, 2026-08-12; the ancestor
+            # sim quotes them too and carries the same latent defect).
+            is_flags = isinstance(value, str) and value.lstrip().startswith("{")
+            quote = '"' if isinstance(value, str) and not is_flags else ""
             reply += tabs + "\t" + item + " : " + quote + str(value) + quote + ",\t\\\r\n"
     reply += tabs + "}"
     return reply
@@ -172,7 +189,10 @@ class SimCamera:
                 return f"{ERR} Parameter {name} not known"
             node, key = hit
             value = node[key]
-            quote = '"' if isinstance(value, str) else ""
+            # Flag lists unquoted — same driver-parser rule as
+            # dict_to_response (see there).
+            is_flags = isinstance(value, str) and value.lstrip().startswith("{")
+            quote = '"' if isinstance(value, str) and not is_flags else ""
             # TODO(format): single-parameter reply framing unverified against
             # the driver's parser — mirrors the struct line style for now.
             return f"{name} : {quote}{value}{quote}"
@@ -234,31 +254,68 @@ class SimCamera:
 
     # -- data stream --------------------------------------------------------
 
-    def img(self, spec: str):
-        """Download request: stream frames to the attached data socket.
+    # fmt token -> bits per pixel, from the driver's format switch
+    # (ADPhantom.cpp ~2195: P10/P12L/8/8R/P16).
+    _FMT_BITS = {"P10": 10, "P12L": 12, "8": 8, "8R": 8, "P16": 16}
 
-        TODO(data): placeholder payload — correctly SIZED zero-frames (the
-        cine's frsize per frame), not the real fmt-token pixel packing that
-        readoutDataStream parses. Enough for socket-level plumbing; the
-        IOC-tier bring-up drives the real format work.
-        """
+    def _spec_fields(self, spec: str):
         m = re.search(r"cine\s*:\s*(-?\d+).*?start\s*:\s*(-?\d+).*?cnt\s*:\s*(\d+)", spec)
-        if not m or self.data_socket is None:
-            return f"{ERR} img: no attach / bad spec {spec!r}"
-        count = int(m.group(3))
-        cine = int(m.group(1))
+        if not m:
+            return None
+        cine, start, count = int(m.group(1)), int(m.group(2)), int(m.group(3))
         name = f"c{max(cine, 0)}" if f"c{max(cine, 0)}" in self.params else "c1"
-        frame = b"\x00" * int(self.params[name]["frsize"])
+        return name, start, count
+
+    def _pump(self, payload: bytes, count: int):
         sock = self.data_socket
+
+        # Pace at 1G wire speed: the real camera streams over gigabit, so a
+        # 1.28 MB frame takes ~10 ms on the wire. Instant delivery is not
+        # just unphysical — it coalesces the driver's per-frame
+        # DownloadCount monitor updates into nothing.
+        frame_s = len(payload) * 8 / 1e9
 
         def pump():
             try:
                 for _ in range(count):
-                    sock.sendall(frame)
-            except OSError:
-                pass  # client went away mid-download; fine for a sim
+                    sock.sendall(payload)
+                    time.sleep(frame_s)
+                print(f"pump: sent {count} x {len(payload)} bytes to "
+                      f"{sock.getpeername()}", flush=True)
+            except OSError as exc:
+                print(f"pump: aborted ({exc})", flush=True)
 
         threading.Thread(target=pump, daemon=True).start()
+
+    def time_stamps(self, spec: str):
+        """``time {cine,start,cnt}``: 12 bytes per frame on the data socket
+        (short_time_stamp32 — the driver readFrame()s cnt*12 bytes BEFORE
+        requesting any image data; an Ok! with no stream stalls the whole
+        download). Zero timestamps decode to valid epoch-start values."""
+        fields = self._spec_fields(spec)
+        if fields is None or self.data_socket is None:
+            return f"{ERR} time: no attach / bad spec {spec!r}"
+        _, _, count = fields
+        self._pump(b"\x00" * 12, count)
+        return OK
+
+    def img(self, spec: str):
+        """Download request: stream frames to the attached data socket.
+
+        Per-frame byte count is the DRIVER'S read contract, not the cine's
+        frsize field: readoutDataStream reads width*height*bits/8 where the
+        bits come from the img request's fmt token. Zero bytes are valid
+        pixels in every packing, so zero-frames of the right SIZE satisfy
+        the full parse-convert-NDArray path.
+        """
+        fields = self._spec_fields(spec)
+        if fields is None or self.data_socket is None:
+            return f"{ERR} img: no attach / bad spec {spec!r}"
+        name, _, count = fields
+        fmt = re.search(r"fmt\s*:\s*(\w+)", spec)
+        bits = self._FMT_BITS.get(fmt.group(1) if fmt else "P10", 10)
+        w, h = (int(v) for v in self.params[name]["res"].split("x"))
+        self._pump(b"\x00" * (w * h * bits // 8), count)
         return OK
 
 
@@ -275,6 +332,9 @@ class CtrlHandler(socketserver.StreamRequestHandler):
             if not command:
                 continue
             reply = self.dispatch(cam, command)
+            if not command.startswith("get"):
+                # log state-changing traffic (gets are the poll firehose)
+                print(f"ctrl: {command}  ->  {reply}", flush=True)
             if reply is None:
                 return
             self.wfile.write((reply + "\n").encode("ascii"))
@@ -297,7 +357,9 @@ class CtrlHandler(socketserver.StreamRequestHandler):
             return OK if cam.data_socket is not None else f"{ERR} no data connection"
         if verb in ("img", "ximg"):
             return cam.img(rest)
-        if verb in ("time", "setrtc", "rel", "del", "bref"):
+        if verb == "time":
+            return cam.time_stamps(rest)
+        if verb in ("setrtc", "rel", "del", "bref"):
             return OK  # acknowledged; no deeper model yet
         if verb == "exit":
             return None
@@ -305,10 +367,23 @@ class CtrlHandler(socketserver.StreamRequestHandler):
 
 
 class DataHandler(socketserver.BaseRequestHandler):
-    """The data-stream connection: registered, then written to by img()."""
+    """The data-stream connection: registered, then written to by img().
+
+    FIRST-writer-wins: the driver holds one persistent data connection for
+    the IOC's lifetime; a later client (a protocol probe, a stray test)
+    must NOT steal the stream slot — that silently starves the driver's
+    readFrame() and wedges its download thread. The slot frees when its
+    owner disconnects (IOC restart), so a reconnecting driver reclaims it.
+    """
 
     def handle(self):
-        self.server.cam.data_socket = self.request
+        cam = self.server.cam
+        if cam.data_socket is None:
+            cam.data_socket = self.request
+            print(f"data: {self.client_address} registered", flush=True)
+        else:
+            print(f"data: {self.client_address} REFUSED slot (driver holds it); "
+                  "connection held open unregistered", flush=True)
         # Hold the connection open until the peer closes it.
         while True:
             try:
@@ -316,8 +391,9 @@ class DataHandler(socketserver.BaseRequestHandler):
                     break
             except OSError:
                 break
-        if self.server.cam.data_socket is self.request:
-            self.server.cam.data_socket = None
+        if cam.data_socket is self.request:
+            cam.data_socket = None
+            print(f"data: {self.client_address} disconnected, slot freed", flush=True)
 
 
 class ReusableServer(socketserver.ThreadingTCPServer):

@@ -78,12 +78,43 @@ Two pieces:
 ## Honest TODOs (marked in `sim_camera.py`)
 
 - **TODO(format)** — dotted-path *get* reply framing not yet verified
-  against the driver's parser (struct gets are).
-- **TODO(data)** — `img` streams correctly *sized* zero-frames, not the
-  real fmt-token pixel packing `readoutDataStream` parses. The IOC-tier
-  bring-up (driver actually connected) drives this out.
+  against the driver's parser (struct gets are — the driver's observed
+  traffic uses struct gets only).
 - **TODO(timing)** — `trig` completes the post-trigger phase instantly;
-  real cameras pace at the programmed rate.
+  real cameras pace at the programmed rate. (Downloads DO pace at 1G wire
+  speed now — see below.)
+
+## Download-path findings (2026-08-12, driven out by the live suite)
+
+Chasing `take_images` end-to-end surfaced four defects — none visible to
+the mock tier:
+
+1. **Flag lists must be UNQUOTED** (`state : { WTR ACT },`): the driver's
+   `parseDataStruc` files a flag-list item only through its
+   repeat-terminator special case, which quoting defeats — with quotes,
+   `c<n>.state` silently never reaches `paramMap_` and the State records
+   stay 0. The ancestor Diamond sim quotes them too and carries the same
+   latent defect.
+2. **`irig.yearbegin` is load-bearing**: `readoutDataStream` integer-parses
+   it before the first `img` request; a missing key silently aborts every
+   download (the ancestor sim has no `irig` struct at all — it predates
+   the fork's usage).
+3. **`time {cine,start,cnt}` must stream 12 bytes/frame** on the data port
+   BEFORE `img` is ever requested; an `Ok!` with no stream wedges the
+   driver's download thread (an IOC restart is the only recovery).
+4. **Per-frame `img` size is the driver's contract, not the cine's
+   `frsize`**: `width*height*bits/8`, bits from the `fmt` token
+   (P10→10, P12L→12, 8/8R→8, P16→16). Zero bytes are valid pixels in
+   every packing, so correctly-sized zero-frames satisfy the full
+   parse→convert→NDArray→HDF path (h5py-verified). Downloads pace at 1G
+   wire speed (~10 ms/1.3 MB frame) — instant delivery is unphysical AND
+   coalesces the driver's per-frame counter updates into nothing.
+
+Device-side catch (fixed in `lib/phantom.py` + hextools): triggering the
+RAM download in one coroutine and watching `DownloadCount` from another
+is a race — a fast download completes and the driver resets the counter
+to 0 before the watcher subscribes. The watch now subscribes, THEN
+triggers, in one task, and treats reset-after-progress as completion.
 
 ## Open beamline-side questions (AJ recon)
 

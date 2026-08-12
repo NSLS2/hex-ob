@@ -164,52 +164,69 @@ def test_acquire_logic(driver: PhantomIO) -> None:
     )
     print("PASS  acquire logic: post-trig mismatch raises")
 
-    # -- success: download started ------------------------------------------
+    # The download watch (subscribe -> trigger -> count to completion) now
+    # lives inside the acquire task (_download_and_watch); mimic the camera
+    # by ramping the counter when the Download put lands, gated so the
+    # stall test below can leave it dead.
+    ramp = {"on": False, "to": 0}
+
+    def _ramp_download(value, **kw):
+        if value and ramp["on"]:
+            for i in range(1, ramp["to"] + 1):
+                set_mock_value(driver.download_count, i)
+
+    callback_on_mock_put(driver.download, _ramp_download)
+
+    # -- success: download started and watched to completion ----------------
     reset()
     set_mock_value(driver.waiting_for_trigger, 1)
     set_mock_value(driver.trigger_received, 1)
     set_mock_value(driver.post_trig_frames, 10)
     set_mock_value(driver.complete_and_valid, 1)
     set_mock_value(driver.array_counter, 10)
+    set_mock_value(driver.download_start_frame, 0)
+    set_mock_value(driver.download_end_frame, 9)
+    ramp.update(on=True, to=10)
     asyncio.run(logic.start_acquiring())
     assert asyncio.run(driver.download.get_value())
-    print("PASS  acquire logic: success path starts the download")
+    print("PASS  acquire logic: success path runs the download to completion")
 
-    # -- wait_for_idle: download stalls -> timeout --------------------------
+    # -- download stalls -> timeout ------------------------------------------
     reset()
     set_mock_value(driver.download_start_frame, -5)
     set_mock_value(driver.download_end_frame, 5)
-    set_mock_value(driver.download, True)
+    ramp.update(on=False)
     expect_raises(
         TimeoutError,
         "Target number of downloaded frames: 11",
-        logic.wait_for_idle(),
+        logic._download_and_watch(),
     )
     print("PASS  acquire logic: stalled download times out")
 
-    # -- wait_for_idle: download completes ----------------------------------
+    # -- download completes --------------------------------------------------
     reset()
     set_mock_value(driver.download_start_frame, -5)
     set_mock_value(driver.download_end_frame, 5)
-    set_mock_value(driver.download, True)
-
-    async def wait_with_download():
-        async def _simulate_download():
-            while True:
-                await asyncio.sleep(0.001)
-                count = await driver.download_count.get_value()
-                if count >= 11:  # -5..5 inclusive
-                    break
-                set_mock_value(driver.download_count, count + 1)
-
-        download_task = asyncio.create_task(_simulate_download())
-        try:
-            await logic.wait_for_idle()
-        finally:
-            download_task.cancel()
-
-    asyncio.run(wait_with_download())
+    ramp.update(on=True, to=11)  # -5..5 inclusive
+    asyncio.run(logic._download_and_watch())
     print("PASS  acquire logic: completed download returns")
+
+    # -- counter reset-to-zero after progress counts as completion ----------
+    # (the driver zeroes DownloadCount when readoutDataStream ends; monitor
+    # coalescing on a fast download can skip the final per-frame update)
+    reset()
+    set_mock_value(driver.download_start_frame, -5)
+    set_mock_value(driver.download_end_frame, 5)
+    ramp.update(on=False)  # silence _ramp_download if both callbacks fire
+
+    def _ramp_with_skip(value, **kw):
+        if value:
+            set_mock_value(driver.download_count, 7)   # partial progress
+            set_mock_value(driver.download_count, 0)   # driver's end reset
+
+    callback_on_mock_put(driver.download, _ramp_with_skip)
+    asyncio.run(logic._download_and_watch())
+    print("PASS  acquire logic: reset-after-progress is completion")
 
 
 def test_describe(tmp_dir: Path) -> None:

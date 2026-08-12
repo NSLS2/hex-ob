@@ -29,7 +29,15 @@ fi
 PY="$TOOLENV/bin/python"
 
 # ---- 0. data dir + services + experiment identity ---------------------------
-mkdir -p /tmp/hex-sim-data && chmod 777 /tmp/hex-sim-data
+# If docker recreated the dir root-owned (daemon restart before up), chmod
+# by non-owner fails even when the mode is already right — writable is what
+# matters.
+mkdir -p /tmp/hex-sim-data
+chmod 777 /tmp/hex-sim-data 2>/dev/null || [ -w /tmp/hex-sim-data ] || {
+    echo "[up_all] ERROR: /tmp/hex-sim-data not writable (root-owned?); fix:"
+    echo "         docker exec -u 0 hexsim-phantom-ioc chmod -R 777 /tmp/hex-sim-data"
+    exit 1
+}
 say "services (Redis/Mongo/Kafka/Tiled) + sim sync-experiment..."
 "$here/up.sh" >/dev/null
 say "  services OK"
@@ -120,7 +128,7 @@ say "  bridge OK"
 if ! pgrep -f "sim_ioc.py" >/dev/null; then
     if [ -f "$PROFILE_MANIFEST" ]; then
         say "starting sim_ioc (pixi env: $PROFILE_MANIFEST)..."
-        BLACKHOLE_EXCLUDE_PREFIXES="XF:27ID1-BI{Kinetix-Det:1} XF:27ID1-ES{PANDA:1} XF:27IDF-OP:1{MC:5-" \
+        BLACKHOLE_EXCLUDE_PREFIXES="XF:27ID1-BI{Kinetix-Det:1} XF:27ID1-ES{PANDA:1} XF:27IDF-OP:1{MC:5- XF:27ID1-ES{Phantom-Det:1}" \
             nohup pixi run --manifest-path "$PROFILE_MANIFEST" -e terminal \
             python "$root/iocs/sim_ioc.py" --kinetix-ids 3 \
             > /tmp/hex-simioc.log 2>&1 &

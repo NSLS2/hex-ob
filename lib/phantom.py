@@ -488,8 +488,13 @@ class PhantomAcquireLogic(ADAcquireLogic):
                     f"does not match actual number {actual_post_trig}"
                 ) from exc
 
-        # Finally, start the download
-        await self.driver.download.set(True)
+        # Start the download and watch it to completion HERE, in the same
+        # task: subscribing in a separate later coroutine (as wait_for_idle
+        # once did) is a race — a fast download (small frame count, 1G
+        # wire) completes and the driver resets the counter to 0 before
+        # the watcher subscribes, and the wait then times out on a
+        # download that succeeded (found against the sim tier, 2026-08-12).
+        await self._download_and_watch()
 
     async def wait_for_idle(self):
         """Wait for the camera to finish downloading and return to idle state.
@@ -499,26 +504,49 @@ class PhantomAcquireLogic(ADAcquireLogic):
         TimeoutError
             If we timeout waiting for the download to complete.
         """
-        # First, make sure our arm process is complete.
+        # The acquire task triggers the download and watches it to
+        # completion (_download_and_watch), so its status ending means the
+        # camera is idle again.
         if self.acquire_status:
             await self.acquire_status
 
+    async def _download_and_watch(self):
+        """Start the RAM download and watch the frame counter to completion.
+
+        Subscribe-then-trigger in one task: the first ``anext()``
+        establishes the monitor (yielding the current value), so no counter
+        update can be missed however fast the download completes.
+
+        Raises
+        ------
+        TimeoutError
+            If we timeout waiting for the download to complete.
+        """
         # Check how many frames we are supposed to download
         target_num_saved = await self.driver.total_download_frames.get_value()
+
+        observation = observe_value(
+            self.driver.download_count, done_timeout=DEFAULT_TIMEOUT
+        )
+        last_value = await anext(observation)
+        await self.driver.download.set(True)
 
         # As long as our download counter is counting up and has not reached the target
         # number of frames, keep waiting. If we timeout, check if the download count
         # has increased since the last time we checked, and if so keep waiting,
         # otherwise raise a timeout error.
-        last_value = None
         while True:
             try:
-                async for num_saved in observe_value(
-                    self.driver.download_count, done_timeout=DEFAULT_TIMEOUT
-                ):
-                    last_value = num_saved
+                async for num_saved in observation:
                     if num_saved == target_num_saved:
                         return
+                    # The driver zeroes DownloadCount when readoutDataStream
+                    # finishes, and CA monitor coalescing on a fast download
+                    # can skip the final per-frame update — so a reset to 0
+                    # after observed progress IS completion, not a restart.
+                    if num_saved == 0 and last_value not in (None, 0):
+                        return
+                    last_value = num_saved
             except TimeoutError as err:
                 current = await self.driver.download_count.get_value()
                 if current == last_value:

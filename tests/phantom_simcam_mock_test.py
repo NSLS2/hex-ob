@@ -104,8 +104,11 @@ def main() -> None:
         time.sleep(0.05)
     assert ctrl.ask("attach {port:7116}") == "Ok!"
     assert ctrl.ask("img {cine:1, start:0, cnt:3, fmt:P16}") == "Ok!"
-    frsize = int(cam.params["c1"]["frsize"])
-    expected = 3 * frsize
+    # Per-frame size is the DRIVER'S read contract: width*height*bits/8
+    # with bits from the fmt token (P16 -> 16), NOT the cine's frsize.
+    w, h = (int(v) for v in cam.params["c1"]["res"].split("x"))
+    frame_bytes = w * h * 16 // 8
+    expected = 3 * frame_bytes
     received = 0
     data_sock.settimeout(5)
     while received < expected:
@@ -113,10 +116,20 @@ def main() -> None:
         assert chunk, "data stream closed early"
         received += len(chunk)
     assert received == expected, (received, expected)
-    print(f"PASS  attach + img (3 frames x {frsize} B on the data port)")
+    print(f"PASS  attach + img (3 frames x {frame_bytes} B P16 on the data port)")
+
+    # -- time streams 12 bytes per frame BEFORE ack-only verbs ---------------
+    assert ctrl.ask("time {cine:1, start:0, cnt:4}") == "Ok!"
+    got = b""
+    while len(got) < 48:
+        chunk = data_sock.recv(4096)
+        assert chunk, "time stream closed early"
+        got += chunk
+    assert len(got) == 48, len(got)
+    print("PASS  time (4 x 12-byte timestamps on the data port)")
 
     # -- misc acks ----------------------------------------------------------
-    for cmd in ("time", "setrtc 0", "rel 1", "del", "bref"):
+    for cmd in ("setrtc 0", "rel 1", "del", "bref"):
         assert ctrl.ask(cmd) == "Ok!", cmd
     assert ctrl.ask("bogus 1").startswith("ERR:")
     print("PASS  misc verbs acknowledged; unknown verb -> ERR:")
