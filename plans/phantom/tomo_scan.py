@@ -237,11 +237,13 @@ def tomo_scan(
 
         yield from bps.declare_stream(*all_devices, name="tomo")
 
-        # PandA first (arms PCOMP at the start angle), then the camera —
-        # WITHOUT waiting: its kickoff blocks until the train fires, and
-        # the train fires during the sweep below.
+        # PandA first (arms PCOMP at the start angle), then the camera.
+        # Under ophyd-async 0.19 the camera's kickoff is quick bookkeeping
+        # (the block-until-train lives in the device's acquire status,
+        # awaited by complete), so kickoff waits here — complete() needs
+        # its context in place before collect_while_completing runs.
         yield from bps.kickoff(panda, wait=True)
-        yield from bps.kickoff(phantom, group="phantom-tomo", wait=False)
+        yield from bps.kickoff(phantom, wait=True)
         yield from wait_for_armed(phantom)
 
         yield from bps.abs_set(rot_stage, stop_deg + lead_angle,
@@ -255,7 +257,6 @@ def tomo_scan(
         yield from bps.unstage_all(*all_devices)
         staged["devices"] = None
 
-        yield from bps.wait(group="phantom-tomo")
         yield from bps.wait(group="tomo_sweep")
         yield from bps.close_run()
 

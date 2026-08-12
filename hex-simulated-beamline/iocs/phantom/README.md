@@ -116,6 +116,34 @@ is a race — a fast download completes and the driver resets the counter
 to 0 before the watcher subscribes. The watch now subscribes, THEN
 triggers, in one task, and treats reset-after-progress as completion.
 
+## tomo_scan bring-up findings (2026-08-12, sim catch #3)
+
+Running `tomo_scan` behaviorally (real phantom + rot_stage, mock PandA per
+`dec:phantom-suite-mock-panda-interim`) surfaced an EXTERNAL-trigger
+deadlock chain the soft-trigger plans could never hit:
+
+1. **Busy-record deadlock**: the device's arm called
+   `set_and_wait_for_other_value(acquire, True, ...)` without
+   `wait_for_set_completion=False`. `Acquire` is a busy record — its
+   put-completion fires when acquisition ENDS — so the arm blocked on the
+   very trigger it was arming for. Soft-trigger plans masked it because
+   `bps.trigger(wait=False)` hides the block inside a status while the
+   plan fires the trigger itself; `prepare(wait=True)` (which arms
+   external-trigger detectors in 0.19) deadlocked outright.
+2. **0.19 acquire-logic contract**: `start_acquiring()` must RETURN once
+   armed, stashing the trigger-wait → count → download flow in
+   `acquire_status` (base-class shape) — ours ran the whole flow inline.
+3. **Stale kickoff lore in the plan**: `tomo_scan` kicked the camera off
+   `wait=False` ("kickoff blocks until the train fires" — 0.17 semantics).
+   In 0.19 kickoff is quick bookkeeping and `complete()` needs its context
+   in place, so `wait=False` raced into `RuntimeError('Kickoff not
+   called')`. Now `wait=True`.
+
+With those fixed, the interim suite is fully green: take_images (10),
+dark_flat_scan (5+3) and tomo_scan (61 projections, sweep + train
+stand-in) all write h5py-verified HDF through the real driver. The PandA
+Angle series stays deferred to the full gate (design capture pending).
+
 ## Open beamline-side questions (AJ recon)
 
 - **Trigger wiring**: which PandA output reaches the Phantom's FSYNC input

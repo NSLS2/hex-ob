@@ -33,6 +33,7 @@ from typing import Annotated as A
 
 from ophyd_async.core import (
     DEFAULT_TIMEOUT,
+    AsyncStatus,
     DetectorTriggerLogic,
     DeviceVector,
     OnOff,
@@ -416,10 +417,35 @@ class PhantomAcquireLogic(ADAcquireLogic):
         self.driver = driver
 
     async def start_acquiring(self):
-        """Start the acquisition and the image data download.
+        """Arm the camera; the rest of the flow runs in ``acquire_status``.
 
-        Start the acquisition, wait for the event trigger,
-        wait for any post trigger frames, and start the download.
+        Per the 0.19 ``DetectorAcquireLogic`` contract this must RETURN once
+        the camera is armed — ``prepare()`` awaits it directly, and for
+        external triggers the event only arrives during the sweep the plan
+        starts AFTER prepare returns, so blocking here on the trigger is a
+        deadlock (found against the sim tier, 2026-08-12; the soft-trigger
+        plans masked it because ``bps.trigger(wait=False)`` hides the block
+        inside a status). The trigger-wait → post-trig count → download flow
+        is stashed as ``self.acquire_status``, which ``wait_for_idle`` /
+        ``complete`` await — the base-class shape.
+        """
+        # Start the acquisition, and wait for waiting for trigger to be True.
+        # wait_for_set_completion=False is LOAD-BEARING: Acquire is a busy
+        # record whose put-completion only fires when acquisition ENDS, so
+        # the default (True) deadlocks the arm against the trigger it is
+        # arming for — the same reason the ADAcquireLogic base passes False.
+        await set_and_wait_for_other_value(
+            self.driver.acquire,
+            True,
+            self.driver.waiting_for_trigger,
+            1,
+            timeout=DEFAULT_TIMEOUT,
+            wait_for_set_completion=False,
+        )
+        self.acquire_status = AsyncStatus(self._acquire_flow())
+
+    async def _acquire_flow(self):
+        """Wait for the event trigger, the post-trigger frames, then download.
 
         Raises
         ------
@@ -430,15 +456,6 @@ class PhantomAcquireLogic(ADAcquireLogic):
         ValueError
             If the number of post trigger frames recorded is not what was expected.
         """
-        # Start the acquisition, and wait for waiting for trigger to be True
-        await set_and_wait_for_other_value(
-            self.driver.acquire,
-            True,
-            self.driver.waiting_for_trigger,
-            1,
-            timeout=DEFAULT_TIMEOUT,
-        )
-
         # Wait for trigger_received to go to 1. If trigger_received does not go
         # to 1 within the timeout, check if acquisition stopped, and if so raise
         # a timeout error indicating acquisition stopped while waiting for trigger.

@@ -122,6 +122,12 @@ def test_acquire_logic(driver: PhantomIO) -> None:
         set_mock_value(driver.download, 0)
         set_mock_value(driver.download_count, 0)
 
+    async def run_acquire():
+        """start_acquiring arms and returns; the trigger-wait -> count ->
+        download flow (and its exceptions) live in acquire_status."""
+        await logic.start_acquiring()
+        await logic.acquire_status
+
     # -- acquisition stops while waiting for the event trigger --------------
     reset()
     set_mock_value(driver.waiting_for_trigger, 1)
@@ -133,7 +139,7 @@ def test_acquire_logic(driver: PhantomIO) -> None:
 
         stop_task = asyncio.create_task(_stop_acquisition())
         try:
-            await logic.start_acquiring()
+            await run_acquire()
         finally:
             stop_task.cancel()
 
@@ -148,7 +154,7 @@ def test_acquire_logic(driver: PhantomIO) -> None:
     set_mock_value(driver.trigger_received, 1)
     set_mock_value(driver.post_trig_frames, 10)
     expect_raises(
-        TimeoutError, "writing to cine was not completed", logic.start_acquiring()
+        TimeoutError, "writing to cine was not completed", run_acquire()
     )
     print("PASS  acquire logic: cine-not-completed raises")
 
@@ -160,7 +166,7 @@ def test_acquire_logic(driver: PhantomIO) -> None:
     set_mock_value(driver.complete_and_valid, 1)
     set_mock_value(driver.array_counter, 5)
     expect_raises(
-        ValueError, "does not match actual number", logic.start_acquiring()
+        ValueError, "does not match actual number", run_acquire()
     )
     print("PASS  acquire logic: post-trig mismatch raises")
 
@@ -187,7 +193,7 @@ def test_acquire_logic(driver: PhantomIO) -> None:
     set_mock_value(driver.download_start_frame, 0)
     set_mock_value(driver.download_end_frame, 9)
     ramp.update(on=True, to=10)
-    asyncio.run(logic.start_acquiring())
+    asyncio.run(run_acquire())
     assert asyncio.run(driver.download.get_value())
     print("PASS  acquire logic: success path runs the download to completion")
 
