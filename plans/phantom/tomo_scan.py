@@ -12,10 +12,12 @@ the HDF writer during the RAM download after the sweep — all encoded in the
 device's arm→trigger→count→download flow (lib/phantom.py).  PCAP still
 captures the per-pulse ``Angle``.
 
-Because the Phantom's kickoff blocks until the train fires, the ordering
-differs from the kinetix ``tomo_flyscan``: PandA first (arms PCOMP), then
-the camera kicked off WITHOUT waiting, then the sweep — the train releases
-the camera as the stage crosses the start angle.
+Under ophyd-async 0.19 the camera's kickoff is quick bookkeeping — the
+block-until-train lives in the device's acquire status, awaited by
+``complete()`` — so both kickoffs wait. The ordering still differs from
+the kinetix ``tomo_flyscan``: PandA first (arms PCOMP), then the camera's
+kickoff, then the sweep — the train releases the camera as the stage
+crosses the start angle, with ``complete()`` watching the flight.
 
 Differences from the original (flagged for beamline review)
 -----------------------------------------------------------

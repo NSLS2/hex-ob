@@ -28,10 +28,12 @@ it records into its internal "cine" RAM during the scan and downloads that
 memory to the HDF file afterwards. **Record fast, then download slow.**
 
 This is why the plan ordering differs (`plans/phantom/tomo_scan.py` vs
-`plans/tomography/tomo_flyscan.py`): the Phantom's kickoff blocks until the
-pulse train actually fires, so the plan arms the PandA first, kicks the
-camera off *without waiting*, and lets the rotation sweep release it. The
-Kinetix plan arms everything fully and then sweeps.
+`plans/tomography/tomo_flyscan.py`): the Phantom must be armed and
+listening *before* the pulse train fires, so the plan arms the PandA
+first, then kicks off the camera (under ophyd-async 0.19 kickoff is quick
+bookkeeping — the wait for the event trigger lives in the device's
+`complete()`), and lets the rotation sweep release it. The Kinetix plan
+arms everything fully and then sweeps.
 
 ## 2. The "post-trigger download window"
 

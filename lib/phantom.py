@@ -476,7 +476,7 @@ class PhantomAcquireLogic(ADAcquireLogic):
                         "Acquisition stopped while waiting for event trigger!"
                     ) from exc
 
-        # After we recieve the event trigger, we want to wait until the number of
+        # After we receive the event trigger, we want to wait until the number of
         # post trigger frames have been recorded before we start the download.
         target_post_trig = await self.driver.post_trig_frames.get_value()
         try:
