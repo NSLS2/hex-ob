@@ -262,6 +262,26 @@ def main() -> None:
     )
     print("PASS  scan_edxd_custom_list (length-mismatch raises)")
 
+    # plan-owned md keys win over caller md; no sleep after the final scan
+    calls.clear()
+    sleeps: list[float] = []
+    # message-level walk (no RE, so no responses: reset_outer=False skips rd)
+    plan = scan_edxd_custom_list(
+        bl.detector, bl.rot_stage, bl.sample_x,
+        outer_positions=[10.0, 20.0],
+        start=0.0, stop=1.0, num_points=3, count_time=0.01,
+        sleep_time=0.5, reset_outer=False, scan_plan=stub,
+        md={"outer_position": -99.0, "sample": "steel"},
+    )
+    for msg in plan:
+        if msg.command == "sleep":
+            sleeps.append(msg.args[0])
+    assert [c[3] for c in calls] == [10.0, 20.0], (
+        f"caller md must not override outer_position: {calls}"
+    )
+    assert sleeps == [0.5], f"sleep only BETWEEN scans, got {sleeps}"
+    print("PASS  scan_edxd_custom_list (md precedence, no trailing sleep)")
+
     print("\nALL PASS")
 
 

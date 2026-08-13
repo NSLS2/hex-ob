@@ -155,11 +155,13 @@ def scan_edxd_custom_list(
                 yield from bps.mv(outer_motor, float(outer_position))
                 print(f"   -> {outer_motor.name} = {outer_position:g}; "
                       f"inner scan {starts[j]:g} -> {stops[j]:g} ({nums[j]} pts)")
-                inner_md = {"outer_motor": outer_motor.name,
-                            "outer_position": outer_position}
+                # caller md first, then the plan-owned keys so they cannot be
+                # accidentally overridden (same order as run_multiple_scans)
+                inner_md = dict(scan_kwargs.get("md") or {})
+                inner_md["outer_motor"] = outer_motor.name
+                inner_md["outer_position"] = outer_position
                 if descs[j] is not None:
                     inner_md["scan_description"] = descs[j]
-                inner_md.update(scan_kwargs.get("md") or {})
                 kwargs = {k: v for k, v in scan_kwargs.items() if k != "md"}
                 yield from scan_plan(
                     detector,
@@ -171,7 +173,8 @@ def scan_edxd_custom_list(
                     md=inner_md,
                     **kwargs,
                 )
-                if sleep_time > 0:
+                last_scan = (iteration == num_iterations - 1) and (j == n - 1)
+                if sleep_time > 0 and not last_scan:
                     yield from bps.sleep(sleep_time)
 
     def _cleanup():
