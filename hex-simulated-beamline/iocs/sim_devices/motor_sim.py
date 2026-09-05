@@ -54,8 +54,13 @@ async def _motor_simulator(instance, async_lib, defaults=None, tick_rate_hz=10.0
             # VMAX/ERES were left at the record default of 0, which makes any
             # client that plans a fly scan from them (hextools tomo_flyscan:
             # travel / VMAX, position / ERES) divide by zero. ERES matches the
-            # motor->INENC bridge's 200 counts per degree.
-            max_velocity=60.0, encoder_resolution=0.005,
+            # motor->INENC bridge's 200 counts per degree. VMAX is what the
+            # software encoder bridge can follow: hextools' time-based PCOMP
+            # uses STEP=2 counts, so the bridge must inject <= 2 counts per
+            # tick (--rate-hz 2000 --max-step 2 -> 4000 counts/s = 20 deg/s);
+            # 10 deg/s leaves the run-up move enough margin to be tracked.
+            # Verified 2026-09-04: hextools tomo_flyscan captured 5/5 rows.
+            max_velocity=10.0, encoder_resolution=0.005,
         )
     fields = instance.field_inst
     have_new_position = False
@@ -88,7 +93,7 @@ async def _motor_simulator(instance, async_lib, defaults=None, tick_rate_hz=10.0
     await fields.velocity.write(defaults["velocity"])
     await fields.seconds_to_velocity.write(defaults["acceleration"])
     await fields.motor_step_size.write(defaults["resolution"])
-    await fields.max_velocity.write(defaults.get("max_velocity", 60.0))
+    await fields.max_velocity.write(defaults.get("max_velocity", 10.0))
     await fields.encoder_step_size.write(defaults.get("encoder_resolution", 0.005))
     await fields.user_low_limit.write(defaults["user_limits"][0])
     await fields.user_high_limit.write(defaults["user_limits"][1])
