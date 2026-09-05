@@ -150,3 +150,13 @@ HEX/
     sync_sim_experiment.sh      # data-session mimic (pass-000000) + /nsls2 tree under sim root
     prune_sim_data.sh           # reclaim sim storage
 ```
+
+## After a container restart
+
+Settings applied at bring-up live only in the IOCs' memory. A plain `docker stop`/`start`
+of `hexsim-kinetix-ioc`, `hexsim-panda-ioc` or `hexsim-panda-sim` loses them (the Kinetix
+TriggerMode choices revert to `Internal/External`, the PandA design is gone) and a restart of
+`hexsim-tiled` empties its `--temp` catalog. Re-apply with:
+
+    scripts/reinit.sh      # PandA design + panda-ioc + Kinetix personality
+    scripts/seed.sh        # Tiled hex/raw catalog (and Redis experiment keys)

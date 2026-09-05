@@ -47,7 +47,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         git build-essential ca-certificates netcat-openbsd \
     && rm -rf /var/lib/apt/lists/*
 # numpy is required at runtime by the FPGA block-sim engine; uv drives the build.
-RUN pip install --no-cache-dir uv numpy
+# numpy<2: PandABlocks-FPGA common/python/configs.py compares arrays with `!=` in a
+# setter (`if getter(self) != v`), which raises ValueError on numpy 2 and crash-loops
+# the sim server (23k restarts observed, 2026-08/09).
+RUN pip install --no-cache-dir uv "numpy<2"
 WORKDIR /src
 RUN git clone --depth 1 --branch "${PANDA_SERVER_REF}" \
         https://github.com/PandABlocks/PandABlocks-server.git .

@@ -59,6 +59,9 @@ services:
   kafka:
     image: apache/kafka:3.9.0
     container_name: hexsim-kafka
+    # Kafka resolves its own hostname at startup; without an explicit one the container id is
+    # used and the lookup fails ("UnknownHostException: <id>: Try again"), killing the broker.
+    hostname: hexsim-kafka
     ports:
       - "127.0.0.1:9092:9092"
     environment:

@@ -30,6 +30,7 @@ sys.path.insert(0, str(Path(__file__).with_name("blackhole")))
 from _ophyd_async_sim import build_pvdb  # noqa: E402
 from kinetix_sim import build_kinetix, build_kinetix_overlay_pvdb  # noqa: E402
 from motor_sim import DEFAULT_MOTOR_PVS, record_exclude_prefix  # noqa: E402
+from shutter_sim import build_shutter_pvdb  # noqa: E402
 
 # NOTE: spoof_beamline (blackhole) is imported *inside* main(), AFTER we set
 # BLACKHOLE_EXCLUDE_PREFIXES, because blackhole reads that env var at import.
@@ -101,6 +102,7 @@ def main():
 
     ioc = BlackholeIOC()  # ioc.pvdb is a fabricating ReallyDefaultDict
     ioc.pvdb.update(typed)  # seed exact typed detector PVs (override fabrication)
+    ioc.pvdb.update(build_shutter_pvdb())  # typed, behaving shutters (see shutter_sim.py)
     print(
         f"[hex-sim-ioc] serving {len(typed)} typed detector PVs "
         f"(motors excluded -> dedicated motor IOC) "
