@@ -6,7 +6,7 @@
 # stays in hex-profile-collection/pixi.toml; this env only needs to import
 # lib/ + plans/ and drive mock signal backends.
 
-[project]
+[workspace]
 name = "hex-ob"
 channels = ["conda-forge"]
 platforms = ["linux-64"]
@@ -14,6 +14,7 @@ platforms = ["linux-64"]
 [dependencies]
 bluesky = ">=1.15.1,<2"
 ophyd-async = ">=0.21.2,<0.22"
+spyder = ">=6.1.7,<7"
 
 
 [tasks]
