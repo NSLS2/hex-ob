@@ -15,6 +15,8 @@ from ophyd_async.epics.adcore import ADWriterFactory
 from ophyd_async.epics.motor import Motor
 from ophyd_async.fastcs.panda import HDFPanda
 
+from lib.detectors import make_kinetix
+
 import bluesky.plans as bp
 import bluesky.plan_stubs as bps
 import bluesky.preprocessors as bpp
@@ -35,14 +37,15 @@ RE = RunEngine(call_returns_result=True)
 # define any axis (Z is in beamline, X is left/right, and Y is up/down)
 # how can I specify an axis for translation scans and only translate along that axis?
 with init_devices():
-    kinetix1 = KinetixDetector(kinetix_prefix,
-                              ADWriterFactory.hdf(path_provider, writer_suffix="HDF1:"),
-                              name="kinetix1")
+    # make_kinetix carries the HEX HDF workarounds (60 s file-close timeout,
+    # SWMR off, flush-now off); a raw KinetixDetector keeps the default 10 s
+    # capture timeout and times out unstaging on network storage.
+    kinetix1 = make_kinetix(1, path_provider)
     panda1 = HDFPanda("XF:27ID1-ES{PANDA:1}:", path_provider=path_provider, name="panda")
 
-    motor_x1 = Motor("XF:27IDF-OP:1{SMPL:1-Ax:X1}:", name="motor_x1")
-    #motor_y1 = Motor("XF:27IDF-OP:1{SMPL:1-Ax:Y1}:", name="motor_y1")
-    motor_z1 = Motor("XF:27IDF-OP:1{SMPL:1-Ax:Z1}:", name="motor_z1")
+    motor_x1 = Motor("XF:27IDF-OP:1{SMPL:1-Ax:X1}Mtr", name="motor_x1")
+    #motor_y1 = Motor("XF:27IDF-OP:1{SMPL:1-Ax:Y1}Mtr", name="motor_y1")
+    motor_z1 = Motor("XF:27IDF-OP:1{SMPL:1-Ax:Z1}Mtr", name="motor_z1")
 
 # Map an axis name to its motor. `scan` moves ONLY the motor(s) you pass it,
 # so scanning a single axis keeps every other axis stationary.
@@ -90,7 +93,7 @@ def translation_scan(axis, start, stop, num_images, exposure_time,
 
     delta = abs(stop - start)
     direction = 1.0 if stop > start else -1.0
-    step_size = delta / num_images
+    step_size = delta / (num_images - 1) # subtract 1 because the first image is at the start position
 
     frame_period = exposure_time + deadtime
     velocity = step_size / frame_period
@@ -102,7 +105,7 @@ def translation_scan(axis, start, stop, num_images, exposure_time,
     # Run-up distance so the stage reaches constant velocity before the first
     # trigger (accel distance = 1/2 * v * t_accel), plus a safety margin.
     accel_time = yield from bps.rd(motor.acceleration_time)
-    run_up = lead_margin * 0.5 * velocity * accel_time
+    run_up = 0.5 * velocity * accel_time
     entry = start - direction * run_up
     exit_pos = stop + direction * run_up
 
@@ -131,10 +134,7 @@ def translation_scan(axis, start, stop, num_images, exposure_time,
     )
 
     def _fly():
-        # Move to the run-up entry point at the original (non-scan) speed.
-        yield from bps.mv(motor.velocity, original_velocity)
-        yield from bps.mv(motor, entry)
-
+        
         # Arm the detector and the PandA pulse train (gate held closed).
         yield from bps.mv(panda.bits.a, 0)
         yield from bps.mv(
@@ -142,20 +142,26 @@ def translation_scan(axis, start, stop, num_images, exposure_time,
             panda.pulse[2].step, frame_period,
             panda.pulse[2].width, exposure_time / 2,
         )
+
         yield from bps.stage_all(detector)
         yield from bps.prepare(detector, trigger_info, wait=True)
         yield from bps.declare_stream(detector, name="primary")
-        yield from bps.kickoff_all(detector, wait=True)
+
+        # Move to the run-up entry point at the original (non-scan) speed.
+        yield from bps.mv(motor, entry)
 
         # Sweep at scan velocity; open the gate the instant we cross `start`.
         yield from bps.mv(motor.velocity, velocity)
+        # yield from bps.abs_set(motor, exit_pos, group="fly_sweep")
+        # pos = yield from bps.rd(motor)
+        # while (pos - start) * direction < 0:
+        #     yield from bps.sleep(0.01)
+        #     pos = yield from bps.rd(motor)
+        yield from bps.kickoff_all(detector, wait=True)
         yield from bps.abs_set(motor, exit_pos, group="fly_sweep")
-        pos = yield from bps.rd(motor)
-        while (pos - start) * direction < 0:
-            yield from bps.sleep(0.01)
-            pos = yield from bps.rd(motor)
+        yield from bps.sleep(accel_time)  # Give the motor a moment to start moving
+    
         yield from bps.mv(panda.bits.a, 1)
-
         yield from bps.collect_while_completing([detector], [detector], flush_period=1)
         yield from bps.wait(group="fly_sweep")
 
@@ -165,7 +171,10 @@ def translation_scan(axis, start, stop, num_images, exposure_time,
         yield from bps.mv(motor.velocity, original_velocity)
         yield from bps.unstage_all(detector)
 
-    yield from bpp.finalize_wrapper(bpp.run_wrapper(_fly()), _cleanup())
+    yield from bpp.finalize_wrapper(
+        bpp.run_wrapper(_fly()),
+        _cleanup(),
+    )
 
 
 # Example: fly X from 0 to 10 mm, 4 images, 0.1 s exposure (Y and Z stay put):
