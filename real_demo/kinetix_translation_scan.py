@@ -11,11 +11,10 @@ from bluesky import RunEngine
 from bluesky.plan_stubs import mv, rd, wait
 
 from ophyd_async.epics.adkinetix import KinetixDetector
-from ophyd_async.epics.adcore import ADWriterFactory
+from ophyd_async.epics.adcore import ADHDFDataLogic, ADWriterFactory, NDFileHDF5IO
+from ophyd_async.epics.core import stop_busy_record
 from ophyd_async.epics.motor import Motor
 from ophyd_async.fastcs.panda import HDFPanda
-
-from lib.detectors import make_kinetix
 
 import bluesky.plans as bp
 import bluesky.plan_stubs as bps
@@ -34,13 +33,39 @@ path_provider = AutoIncrementingPathProvider(
 
 RE = RunEngine(call_returns_result=True)
 
+
+class SlowCloseHDFDataLogic(ADHDFDataLogic):
+    """HDF writer logic for network storage: SWMR off, 60 s file close."""
+
+    async def prepare_unbounded(self, datakey_name):
+        provider = await super().prepare_unbounded(datakey_name)
+        await self.writer.swmr_mode.set(False)
+        return provider
+
+    async def stop(self):
+        # Closing the HDF file on /nsls2/data can exceed the default 10 s.
+        await stop_busy_record(self.writer.capture, timeout=60)
+
+
+hdf_writer = ADWriterFactory(
+    writer_cls=NDFileHDF5IO,
+    writer_suffix="HDF1:",
+    writer_name="hdf",
+    datakey_suffix="",
+    array_description=None,
+    data_logic_factory=lambda writer, desc, driver, plugins: SlowCloseHDFDataLogic(
+        array_description=desc,
+        path_provider=path_provider,
+        driver=driver,
+        writer=writer,
+        plugins=list(plugins),
+    ),
+)
+
 # define any axis (Z is in beamline, X is left/right, and Y is up/down)
 # how can I specify an axis for translation scans and only translate along that axis?
 with init_devices():
-    # make_kinetix carries the HEX HDF workarounds (60 s file-close timeout,
-    # SWMR off, flush-now off); a raw KinetixDetector keeps the default 10 s
-    # capture timeout and times out unstaging on network storage.
-    kinetix1 = make_kinetix(1, path_provider)
+    kinetix1 = KinetixDetector(kinetix_prefix, hdf_writer, name="kinetix1")
     panda1 = HDFPanda("XF:27ID1-ES{PANDA:1}:", path_provider=path_provider, name="panda")
 
     motor_x1 = Motor("XF:27IDF-OP:1{SMPL:1-Ax:X1}Mtr", name="motor_x1")
