@@ -7,6 +7,7 @@
 # lib/ + plans/ and drive mock signal backends.
 
 [workspace]
+requires-pixi = ">=0.82.1"
 name = "hex-ob"
 channels = ["conda-forge"]
 platforms = ["linux-64"]
